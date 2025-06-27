@@ -2,14 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Client } from '@notionhq/client';
 
 // Notion API 타입 정의
-interface NotionPage {
-  id: string;
-  properties: Record<string, unknown>;
-  url: string;
-  created_time: string;
-  last_edited_time: string;
-}
-
 interface NotionProperty {
   type: string;
   title?: Array<{ plain_text: string }>;
