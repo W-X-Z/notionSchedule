@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { RAGSystem } from '@/lib/rag';
 
+// 간단한 타입 정의
+interface SimpleNotionProperty {
+  type: string;
+  title?: Array<{ plain_text: string }>;
+  rich_text?: Array<{ plain_text: string }>;
+}
+
 export async function POST(request: NextRequest) {
   try {
     console.log('=== Chat API 호출 시작 ===');
@@ -67,27 +74,109 @@ export async function POST(request: NextRequest) {
     let ragSuccess = false;
 
     // RAG 시스템 사용 시도
-    if (useRAG) {
+    if (useRAG && settings.notionApiKey && settings.notionDatabaseId) {
       try {
         console.log('RAG 시스템 초기화 중...');
         const ragSystem = new RAGSystem();
-        const hasData = await ragSystem.loadFromLocalStorage();
+        ragSystem.initializeOpenAI(openaiApiKey);
         
-        if (hasData && ragSystem.getStatus().isReady) {
-          console.log('RAG 시스템 로드 성공, 관련 정보 검색 중...');
-          
-          // 관련 정보 검색
-          const searchResults = await ragSystem.searchSimilarChunks(message, 5);
-          contextData = ragSystem.formatSearchResults(searchResults);
-          searchInfo = `RAG 검색: ${searchResults.length}개 관련 문서 발견 (평균 유사도: ${(searchResults.reduce((sum, r) => sum + r.score, 0) / searchResults.length * 100).toFixed(1)}%)`;
-          ragSuccess = true;
-          
-          console.log('RAG 검색 완료:', searchInfo);
-          console.log('컨텍스트 데이터 길이:', contextData.length);
-        } else {
-          console.log('RAG 데이터가 없음, 기존 방식으로 폴백');
-          throw new Error('RAG 시스템이 초기화되지 않았습니다.');
+        // 서버리스 환경에서는 실시간으로 RAG 시스템 구축
+        console.log('노션 데이터를 가져와서 RAG 시스템 구축 중...');
+        
+        // initialize-rag API와 동일한 로직으로 노션 데이터 가져오기
+        const { Client } = await import('@notionhq/client');
+        const notion = new Client({
+          auth: settings.notionApiKey,
+        });
+
+        // 데이터베이스 쿼리 실행
+        let allResults: unknown[] = [];
+        let hasMore = true;
+        let nextCursor: string | undefined = undefined;
+
+        while (hasMore) {
+          const response = await notion.databases.query({
+            database_id: settings.notionDatabaseId,
+            start_cursor: nextCursor,
+            page_size: 100,
+          });
+
+          allResults = allResults.concat(response.results);
+          hasMore = response.has_more;
+          nextCursor = response.next_cursor || undefined;
         }
+
+        if (allResults.length === 0) {
+          throw new Error('노션 데이터베이스가 비어있습니다.');
+        }
+
+        // 간단한 텍스트 추출
+        const extractSimpleText = (page: unknown): string => {
+          const pageObj = page as Record<string, unknown>;
+          const properties = pageObj.properties as Record<string, unknown>;
+          
+          let text = '';
+          
+          // 제목 추출
+          for (const [, value] of Object.entries(properties)) {
+            const prop = value as SimpleNotionProperty;
+            if (prop.type === 'title' && prop.title) {
+              const title = prop.title.map((t) => t.plain_text).join('');
+              text += `제목: ${title}\n`;
+              break;
+            }
+          }
+          
+          // 기본 속성들 추출
+          for (const [key, value] of Object.entries(properties)) {
+            const prop = value as SimpleNotionProperty;
+            if (prop.type === 'rich_text' && prop.rich_text && prop.rich_text.length > 0) {
+              const content = prop.rich_text.map((t) => t.plain_text).join('');
+              if (content) {
+                text += `${key}: ${content}\n`;
+              }
+            }
+          }
+          
+          text += `생성일: ${new Date(pageObj.created_time as string).toLocaleString('ko-KR')}\n`;
+          text += `마지막 수정: ${new Date(pageObj.last_edited_time as string).toLocaleString('ko-KR')}\n`;
+          text += '---\n';
+          
+          return text;
+        };
+
+        const notionData = allResults.map(extractSimpleText).join('\n');
+        
+        // RAG용 객체 배열로 변환
+        const notionPages = [{
+          id: 'notion-data',
+          properties: {
+            title: {
+              title: [{ plain_text: '노션 데이터베이스' }]
+            }
+          },
+          content: notionData,
+          last_edited_time: new Date().toISOString(),
+          url: `https://notion.so/${settings.notionDatabaseId}`
+        }];
+        
+        // 노션 데이터를 청크로 분할
+        const chunks = await ragSystem.processNotionData(notionPages);
+        console.log(`${chunks.length}개의 청크를 생성했습니다.`);
+        
+        // 임베딩 생성
+        await ragSystem.generateEmbeddings();
+        console.log('임베딩 생성 완료');
+        
+        // 관련 정보 검색
+        const searchResults = await ragSystem.searchSimilarChunks(message, 5);
+        contextData = ragSystem.formatSearchResults(searchResults);
+        searchInfo = `RAG 검색: ${searchResults.length}개 관련 문서 발견 (평균 유사도: ${(searchResults.reduce((sum, r) => sum + r.score, 0) / searchResults.length * 100).toFixed(1)}%)`;
+        ragSuccess = true;
+        
+        console.log('RAG 검색 완료:', searchInfo);
+        console.log('컨텍스트 데이터 길이:', contextData.length);
+        
       } catch (ragError) {
         console.warn('RAG 시스템 사용 실패, 기존 방식으로 전환:', ragError);
         ragSuccess = false;
