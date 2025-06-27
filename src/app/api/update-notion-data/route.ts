@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Client } from '@notionhq/client';
 
 export async function POST(request: NextRequest) {
+  let apiKey: string = '';
+  let databaseId: string = '';
+  
   try {
     const body = await request.json();
-    const { apiKey, databaseId } = body;
+    ({ apiKey, databaseId } = body);
 
     if (!apiKey || !databaseId) {
       return NextResponse.json(
@@ -28,12 +31,7 @@ export async function POST(request: NextRequest) {
         database_id: databaseId,
         start_cursor: nextCursor,
         page_size: 100,
-        sorts: [
-          {
-            property: 'Last edited time',
-            direction: 'descending'
-          }
-        ],
+        // 정렬 옵션 제거 (데이터베이스에 없는 속성으로 인한 오류 방지)
       });
 
       allResults = allResults.concat(response.results);
@@ -121,8 +119,18 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Notion API error:', error);
+    console.error('Error details:', {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      apiKey: apiKey ? `${apiKey.substring(0, 10)}...` : 'undefined',
+      databaseId: databaseId || 'undefined'
+    });
+    
     return NextResponse.json(
-      { error: 'Notion 데이터를 가져오는 중 오류가 발생했습니다.' },
+      { 
+        error: 'Notion 데이터를 가져오는 중 오류가 발생했습니다.',
+        details: error instanceof Error ? error.message : String(error)
+      },
       { status: 500 }
     );
   }

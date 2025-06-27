@@ -1,11 +1,35 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { RAGSystem } from '@/lib/rag';
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
     console.log('RAG 시스템 초기화 시작...');
     
+    const body = await request.json();
+    const { openaiApiKey, notionApiKey, notionDatabaseId } = body;
+
+    if (!openaiApiKey) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'OpenAI API 키가 필요합니다.',
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!notionApiKey || !notionDatabaseId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Notion API 키와 데이터베이스 ID가 필요합니다.',
+        },
+        { status: 400 }
+      );
+    }
+    
     const ragSystem = new RAGSystem();
+    ragSystem.initializeOpenAI(openaiApiKey);
     
     // 기존 데이터가 있는지 확인
     const hasExistingData = await ragSystem.loadFromLocalStorage();
@@ -22,22 +46,42 @@ export async function POST() {
     // 노션 데이터 가져오기
     const notionResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/update-notion-data`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        apiKey: notionApiKey,
+        databaseId: notionDatabaseId,
+      }),
     });
     
     if (!notionResponse.ok) {
       throw new Error('노션 데이터를 가져올 수 없습니다.');
     }
     
-    const { data: notionData } = await notionResponse.json();
+    const notionResult = await notionResponse.json();
     
-    if (!notionData || notionData.length === 0) {
+    if (!notionResult.success || !notionResult.data) {
       throw new Error('노션 데이터가 비어있습니다.');
     }
     
-    console.log(`${notionData.length}개의 노션 페이지를 처리 중...`);
+    console.log(`노션 데이터를 처리 중... (${notionResult.count}개 항목)`);
+    
+    // 노션 API에서 받은 텍스트 데이터를 RAG용 객체 배열로 변환
+    const notionPages = [{
+      id: 'notion-data',
+      properties: {
+        title: {
+          title: [{ plain_text: '노션 데이터베이스' }]
+        }
+      },
+      content: notionResult.data,
+      last_edited_time: new Date().toISOString(),
+      url: `https://notion.so/${notionDatabaseId}`
+    }];
     
     // 노션 데이터를 청크로 분할
-    const chunks = await ragSystem.processNotionData(notionData);
+    const chunks = await ragSystem.processNotionData(notionPages);
     console.log(`${chunks.length}개의 청크를 생성했습니다.`);
     
     // 임베딩 생성

@@ -1,9 +1,5 @@
 import OpenAI from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 export interface DocumentChunk {
   id: string;
   content: string;
@@ -25,6 +21,16 @@ export interface SearchResult {
 export class RAGSystem {
   private chunks: DocumentChunk[] = [];
   private embeddings: Map<string, number[]> = new Map();
+  private openai: OpenAI | null = null;
+
+  /**
+   * OpenAI 클라이언트 초기화
+   */
+  initializeOpenAI(apiKey: string) {
+    this.openai = new OpenAI({
+      apiKey: apiKey,
+    });
+  }
 
   /**
    * 노션 데이터를 청킹하여 처리
@@ -179,12 +185,16 @@ export class RAGSystem {
       const texts = batch.map(chunk => chunk.content);
       
       try {
-        const response = await openai.embeddings.create({
+        if (!this.openai) {
+          throw new Error('OpenAI 클라이언트가 초기화되지 않았습니다.');
+        }
+
+        const response = await this.openai.embeddings.create({
           model: 'text-embedding-3-small',
           input: texts,
         });
         
-        response.data.forEach((embedding, index) => {
+        response.data.forEach((embedding: any, index: number) => { // eslint-disable-line @typescript-eslint/no-explicit-any
           const chunkId = batch[index].id;
           this.embeddings.set(chunkId, embedding.embedding);
           this.chunks[i + index].embedding = embedding.embedding;
@@ -228,7 +238,11 @@ export class RAGSystem {
    * 쿼리 임베딩 생성
    */
   private async getQueryEmbedding(query: string): Promise<number[]> {
-    const response = await openai.embeddings.create({
+    if (!this.openai) {
+      throw new Error('OpenAI 클라이언트가 초기화되지 않았습니다.');
+    }
+
+    const response = await this.openai.embeddings.create({
       model: 'text-embedding-3-small',
       input: query,
     });

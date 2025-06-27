@@ -39,18 +39,16 @@ export default function SettingsPage() {
     openaiModel: 'gpt-4o-mini',
     systemPrompt: DEFAULT_PROMPT
   });
-  const [isUpdatingDb, setIsUpdatingDb] = useState(false);
   const [showNotionKey, setShowNotionKey] = useState(false);
   const [showOpenaiKey, setShowOpenaiKey] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [isInitializingRAG, setIsInitializingRAG] = useState(false);
+  const [isUpdatingSystem, setIsUpdatingSystem] = useState(false);
   const [ragStatus, setRagStatus] = useState<{
     chunksCount: number;
     embeddingsCount: number;
     isReady: boolean;
   } | null>(null);
-  const [ragLastUpdated, setRagLastUpdated] = useState<string | null>(null);
 
   useEffect(() => {
     // 로컬 스토리지에서 설정 불러오기
@@ -67,12 +65,6 @@ export default function SettingsPage() {
 
     // RAG 상태 확인
     checkRAGStatus();
-    
-    // RAG 마지막 업데이트 시간 불러오기
-    const ragLastUpdate = localStorage.getItem('rag-last-updated');
-    if (ragLastUpdate) {
-      setRagLastUpdated(ragLastUpdate);
-    }
   }, []);
 
   const handleInputChange = (field: keyof Settings, value: string) => {
@@ -109,77 +101,48 @@ export default function SettingsPage() {
     }
   };
 
-  const initializeRAG = async () => {
-    if (!settings.openaiApiKey) {
-      alert('OpenAI API 키를 먼저 설정해주세요.');
-      return;
-    }
-
-    setIsInitializingRAG(true);
-    try {
-      const response = await fetch('/api/initialize-rag', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('RAG 시스템 초기화에 실패했습니다.');
-      }
-
-      const data = await response.json();
-      const updateTime = new Date().toLocaleString('ko-KR');
-      setRagLastUpdated(updateTime);
-      localStorage.setItem('rag-last-updated', updateTime);
-      setRagStatus(data.status);
-      
-      alert(`RAG 시스템이 성공적으로 초기화되었습니다. (${data.status.chunksCount}개 청크, ${data.status.embeddingsCount}개 임베딩)`);
-    } catch (error) {
-      console.error('RAG 초기화 오류:', error);
-      alert('RAG 시스템 초기화 중 오류가 발생했습니다.');
-    } finally {
-      setIsInitializingRAG(false);
-    }
-  };
-
-  const updateDatabase = async () => {
+  const updateSystemData = async () => {
     if (!settings.notionApiKey || !settings.notionDatabaseId) {
       alert('Notion API 키와 데이터베이스 ID를 먼저 설정해주세요.');
       return;
     }
 
-    setIsUpdatingDb(true);
+    if (!settings.openaiApiKey) {
+      alert('OpenAI API 키를 먼저 설정해주세요.');
+      return;
+    }
+
+    setIsUpdatingSystem(true);
     try {
-      const response = await fetch('/api/update-notion-data', {
+      // RAG 초기화 (내부적으로 노션 데이터 업데이트도 수행)
+      const response = await fetch('/api/initialize-rag', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          apiKey: settings.notionApiKey,
-          databaseId: settings.notionDatabaseId,
+          openaiApiKey: settings.openaiApiKey,
+          notionApiKey: settings.notionApiKey,
+          notionDatabaseId: settings.notionDatabaseId,
         }),
       });
 
       if (!response.ok) {
-        throw new Error('데이터베이스 업데이트에 실패했습니다.');
+        throw new Error('시스템 업데이트에 실패했습니다.');
       }
 
       const data = await response.json();
       const updateTime = new Date().toLocaleString('ko-KR');
       setLastUpdated(updateTime);
       localStorage.setItem('notion-data-last-updated', updateTime);
+      setRagStatus(data.status);
       
-      // Notion 데이터를 로컬 스토리지에 저장
-      localStorage.setItem('notion-data', data.data);
-      
-      alert(`데이터베이스가 성공적으로 업데이트되었습니다. (${data.count}개 항목)`);
+      alert(`시스템이 성공적으로 업데이트되었습니다. (${data.status.chunksCount}개 청크, ${data.status.embeddingsCount}개 임베딩)`);
     } catch (error) {
-      console.error('Database update error:', error);
-      alert('데이터베이스 업데이트 중 오류가 발생했습니다.');
+      console.error('시스템 업데이트 오류:', error);
+      alert('시스템 업데이트 중 오류가 발생했습니다.');
     } finally {
-      setIsUpdatingDb(false);
+      setIsUpdatingSystem(false);
     }
   };
 
@@ -368,23 +331,23 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* RAG System Management Card */}
+          {/* System Management Card */}
           <div className="card p-8">
             <div className="flex items-center space-x-3 mb-6">
               <div className="w-12 h-12 bg-gradient-to-br from-violet-600 to-purple-600 rounded-2xl flex items-center justify-center">
                 <Brain className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h2 className="text-2xl font-bold text-gray-900">RAG 시스템</h2>
-                <p className="text-gray-600">지능형 검색 및 응답 시스템</p>
+                <h2 className="text-2xl font-bold text-gray-900">시스템 관리</h2>
+                <p className="text-gray-600">Notion 데이터 동기화 및 RAG 시스템</p>
               </div>
             </div>
             
-            <div className="bg-gradient-to-r from-violet-50 to-purple-50/50 p-6 rounded-2xl border border-violet-200/50 mb-6">
+            <div className="bg-gradient-to-r from-violet-50 to-purple-50/50 p-6 rounded-2xl border border-violet-200/50">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex-1">
                   <p className="text-gray-700 font-medium mb-2">
-                    RAG(Retrieval-Augmented Generation) 시스템을 사용하여 더 정확하고 효율적인 응답을 제공합니다.
+                    Notion 데이터를 가져와 RAG 시스템을 업데이트합니다.
                   </p>
                   <div className="space-y-2">
                     {ragStatus && ragStatus.isReady ? (
@@ -397,12 +360,6 @@ export default function SettingsPage() {
                           <Search className="w-4 h-4" />
                           <span>{ragStatus.chunksCount}개 문서 청크, {ragStatus.embeddingsCount}개 임베딩</span>
                         </div>
-                        {ragLastUpdated && (
-                          <div className="flex items-center space-x-2 text-sm text-gray-600">
-                            <CheckCircle className="w-4 h-4 text-green-600" />
-                            <span>마지막 업데이트: {ragLastUpdated}</span>
-                          </div>
-                        )}
                       </>
                     ) : (
                       <div className="flex items-center space-x-2 text-sm text-orange-600">
@@ -410,68 +367,21 @@ export default function SettingsPage() {
                         <span>RAG 시스템이 초기화되지 않았습니다</span>
                       </div>
                     )}
+                    {lastUpdated && (
+                      <div className="flex items-center space-x-2 text-sm text-gray-600">
+                        <CheckCircle className="w-4 h-4 text-green-600" />
+                        <span>마지막 업데이트: {lastUpdated}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <button
-                  onClick={initializeRAG}
-                  disabled={isInitializingRAG || !settings.openaiApiKey}
+                  onClick={updateSystemData}
+                  disabled={isUpdatingSystem || !settings.openaiApiKey || !settings.notionApiKey || !settings.notionDatabaseId}
                   className="btn-primary flex items-center space-x-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700"
                 >
-                  <Brain size={18} className={isInitializingRAG ? 'animate-pulse' : ''} />
-                  <span>{isInitializingRAG ? 'RAG 초기화 중...' : 'RAG 초기화'}</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-200/50">
-              <h4 className="font-semibold text-blue-900 mb-2">💡 RAG 시스템의 장점</h4>
-              <ul className="text-sm text-blue-800 space-y-1">
-                <li>• <strong>비용 효율성:</strong> 관련 정보만 검색하여 토큰 사용량 90% 절감</li>
-                <li>• <strong>정확성 향상:</strong> 질문과 관련된 정보만 선별하여 더 정확한 답변</li>
-                <li>• <strong>빠른 응답:</strong> 전체 데이터 대신 관련 부분만 처리하여 응답 속도 향상</li>
-                <li>• <strong>확장성:</strong> 데이터가 증가해도 성능 저하 없이 동작</li>
-              </ul>
-            </div>
-          </div>
-
-          {/* Database Management Card */}
-          <div className="card p-8">
-            <div className="flex items-center space-x-3 mb-6">
-              <div className="w-12 h-12 bg-gradient-to-br from-orange-600 to-red-600 rounded-2xl flex items-center justify-center">
-                <RefreshCw className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900">데이터베이스 관리</h2>
-                <p className="text-gray-600">Notion 데이터 동기화</p>
-              </div>
-            </div>
-            
-            <div className="bg-gradient-to-r from-gray-50 to-blue-50/50 p-6 rounded-2xl border border-gray-200/50">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="flex-1">
-                  <p className="text-gray-700 font-medium mb-2">
-                    Notion 데이터베이스에서 최신 데이터를 가져와 로컬 스토리지에 저장합니다.
-                  </p>
-                  {lastUpdated && (
-                    <div className="flex items-center space-x-2 text-sm text-gray-600">
-                      <CheckCircle className="w-4 h-4 text-green-600" />
-                      <span>마지막 업데이트: {lastUpdated}</span>
-                    </div>
-                  )}
-                  {!lastUpdated && (
-                    <div className="flex items-center space-x-2 text-sm text-gray-600">
-                      <AlertCircle className="w-4 h-4 text-orange-500" />
-                      <span>아직 데이터를 업데이트하지 않았습니다</span>
-                    </div>
-                  )}
-                </div>
-                <button
-                  onClick={updateDatabase}
-                  disabled={isUpdatingDb || !settings.notionApiKey || !settings.notionDatabaseId}
-                  className="btn-primary flex items-center space-x-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none"
-                >
-                  <RefreshCw size={18} className={isUpdatingDb ? 'animate-spin' : ''} />
-                  <span>{isUpdatingDb ? '업데이트 중...' : 'DB 업데이트'}</span>
+                  <Brain size={18} className={isUpdatingSystem ? 'animate-pulse' : ''} />
+                  <span>{isUpdatingSystem ? '시스템 업데이트 중...' : 'Notion & RAG 업데이트'}</span>
                 </button>
               </div>
             </div>
