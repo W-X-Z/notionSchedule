@@ -122,6 +122,7 @@ export async function POST(request: NextRequest) {
           const properties = pageObj.properties as Record<string, unknown>;
           
           let text = '';
+          const dateProperties: Record<string, string> = {};
           
           // 제목 추출
           for (const [, value] of Object.entries(properties)) {
@@ -151,6 +152,12 @@ export async function POST(request: NextRequest) {
                   const startDate = new Date(prop.date.start).toLocaleDateString('ko-KR');
                   const endDate = prop.date.end ? ` ~ ${new Date(prop.date.end).toLocaleDateString('ko-KR')}` : '';
                   text += `${key}: ${startDate}${endDate}\n`;
+                  
+                  // 날짜 정보를 메타데이터에 저장
+                  dateProperties[key] = prop.date.start;
+                  if (prop.date.end) {
+                    dateProperties[`${key}_end`] = prop.date.end;
+                  }
                 }
                 break;
               case 'select':
@@ -184,23 +191,58 @@ export async function POST(request: NextRequest) {
           text += `마지막 수정: ${new Date(pageObj.last_edited_time as string).toLocaleString('ko-KR')}\n`;
           text += '---\n';
           
+          // 날짜 정보를 텍스트에 추가로 포함 (RAG 검색에서 활용)
+          if (Object.keys(dateProperties).length > 0) {
+            text += `[날짜 정보: ${JSON.stringify(dateProperties)}]\n`;
+          }
+          
           return text;
         };
 
-        const notionData = allResults.map(extractSimpleText).join('\n');
-        
-        // RAG용 객체 배열로 변환
-        const notionPages = [{
-          id: 'notion-data',
-          properties: {
-            title: {
-              title: [{ plain_text: '노션 데이터베이스' }]
+        // RAG용 객체 배열로 변환 (날짜 메타데이터 포함)
+        const notionPages = allResults.map((page, index) => {
+          const pageObj = page as Record<string, unknown>;
+          const properties = pageObj.properties as Record<string, unknown>;
+          
+          // 날짜 속성 추출
+          const dateProperties: Record<string, string> = {};
+          for (const [key, value] of Object.entries(properties)) {
+            const prop = value as SimpleNotionProperty;
+            if (prop.type === 'date' && prop.date && prop.date.start) {
+              dateProperties[key] = prop.date.start;
+              if (prop.date.end) {
+                dateProperties[`${key}_end`] = prop.date.end;
+              }
             }
-          },
-          content: notionData,
-          last_edited_time: new Date().toISOString(),
-          url: `https://notion.so/${settings.notionDatabaseId}`
-        }];
+          }
+          
+          // 제목 추출
+          let title = `페이지 ${index + 1}`;
+          for (const [, value] of Object.entries(properties)) {
+            const prop = value as SimpleNotionProperty;
+            if (prop.type === 'title' && prop.title) {
+              title = prop.title.map((t) => t.plain_text).join('');
+              break;
+            }
+          }
+          
+          return {
+            id: `notion-page-${index}`,
+            properties: {
+              title: {
+                title: [{ plain_text: title }]
+              }
+            },
+            content: extractSimpleText(page),
+            last_edited_time: pageObj.last_edited_time as string,
+            url: `https://notion.so/${pageObj.id}`,
+            metadata: {
+              properties: dateProperties,
+              created_time: pageObj.created_time as string,
+              last_edited_time: pageObj.last_edited_time as string
+            }
+          };
+        });
         
         // 노션 데이터를 청크로 분할
         const chunks = await ragSystem.processNotionData(notionPages);

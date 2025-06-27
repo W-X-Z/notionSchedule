@@ -9,6 +9,8 @@ export interface DocumentChunk {
     lastModified: string;
     url?: string;
     properties?: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    chunkIndex?: number;
+    totalChunks?: number;
   };
   embedding?: number[];
 }
@@ -33,51 +35,60 @@ export class RAGSystem {
   }
 
   /**
-   * 노션 데이터를 청킹하여 처리
+   * Notion 데이터를 처리하여 청크로 분할
    */
   async processNotionData(notionData: any[]): Promise<DocumentChunk[]> { // eslint-disable-line @typescript-eslint/no-explicit-any
-    const chunks: DocumentChunk[] = [];
+    this.chunks = [];
     
     for (const page of notionData) {
-      // 페이지 제목과 내용을 결합
-      const title = page.properties?.title?.title?.[0]?.plain_text || 'Untitled';
       const content = this.extractTextContent(page);
+      const title = page.properties?.title?.title?.[0]?.plain_text || 'Untitled';
       
-      if (content.trim().length < 50) continue; // 너무 짧은 내용은 제외
-      
-      // 큰 내용을 청크로 분할
+      // 페이지를 청크로 분할
       const pageChunks = this.splitIntoChunks(content, title, page);
-      chunks.push(...pageChunks);
+      this.chunks.push(...pageChunks);
     }
     
-    this.chunks = chunks;
-    return chunks;
+    return this.chunks;
   }
 
   /**
-   * 텍스트 내용 추출
+   * 페이지에서 텍스트 콘텐츠 추출
    */
   private extractTextContent(page: any): string { // eslint-disable-line @typescript-eslint/no-explicit-any
     let content = '';
     
-    // 제목 추가
-    const title = page.properties?.title?.title?.[0]?.plain_text || '';
-    if (title) content += `제목: ${title}\n\n`;
-    
-    // 프로퍼티들 추가
-    if (page.properties) {
-              for (const [propertyKey, value] of Object.entries(page.properties)) {
-          if (propertyKey === 'title') continue;
-          const textValue = this.extractPropertyText(value);
-          if (textValue) {
-            content += `${propertyKey}: ${textValue}\n`;
-          }
-        }
+    // 직접 content 속성이 있는 경우 (chat API에서 전처리된 데이터)
+    if (page.content) {
+      return page.content;
     }
     
-    // 페이지 내용 추가 (만약 있다면)
-    if (page.content) {
-      content += `\n내용:\n${page.content}`;
+    // 제목 추출
+    if (page.properties?.title?.title) {
+      const title = page.properties.title.title
+        .map((t: any) => t.plain_text) // eslint-disable-line @typescript-eslint/no-explicit-any
+        .join('');
+      content += `제목: ${title}\n`;
+    }
+    
+    // 다른 속성들 추출
+    if (page.properties) {
+      for (const [key, property] of Object.entries(page.properties)) {
+        if (key === 'title') continue; // 이미 처리됨
+        
+        const propertyText = this.extractPropertyText(property);
+        if (propertyText) {
+          content += `${key}: ${propertyText}\n`;
+        }
+      }
+    }
+    
+    // 페이지 메타데이터
+    if (page.created_time) {
+      content += `생성일: ${new Date(page.created_time).toLocaleString('ko-KR')}\n`;
+    }
+    if (page.last_edited_time) {
+      content += `마지막 수정: ${new Date(page.last_edited_time).toLocaleString('ko-KR')}\n`;
     }
     
     return content;
@@ -116,57 +127,79 @@ export class RAGSystem {
   }
 
   /**
-   * 텍스트를 의미있는 청크로 분할
+   * 콘텐츠를 청크로 분할
    */
   private splitIntoChunks(content: string, title: string, page: any): DocumentChunk[] { // eslint-disable-line @typescript-eslint/no-explicit-any
     const chunks: DocumentChunk[] = [];
-    const maxChunkSize = 1000; // 토큰 제한 고려
-    const overlap = 200; // 청크 간 겹침
+    const chunkSize = 1000;
+    const overlap = 200;
     
-    // 문단 단위로 먼저 분할
-    const paragraphs = content.split('\n\n').filter(p => p.trim().length > 0);
+    // 페이지 메타데이터 추출 (날짜 정보 포함)
+    const metadata: Record<string, any> = { // eslint-disable-line @typescript-eslint/no-explicit-any
+      title,
+      pageId: page.id || 'unknown',
+      lastModified: page.last_edited_time || new Date().toISOString(),
+      url: page.url,
+      properties: {}
+    };
     
-    let currentChunk = '';
-    let chunkIndex = 0;
-    
-    for (const paragraph of paragraphs) {
-      if (currentChunk.length + paragraph.length > maxChunkSize && currentChunk.length > 0) {
-        // 현재 청크 저장
-        chunks.push({
-          id: `${page.id}_chunk_${chunkIndex}`,
-          content: currentChunk.trim(),
-          metadata: {
-            title,
-            pageId: page.id,
-            lastModified: page.last_edited_time || new Date().toISOString(),
-            url: page.url,
-            properties: page.properties,
+    // 날짜 속성 추출하여 메타데이터에 저장
+    if (page.metadata?.properties) {
+      metadata.properties = { ...page.metadata.properties };
+    } else if (page.properties) {
+      // 직접 properties에서 날짜 정보 추출
+      for (const [key, property] of Object.entries(page.properties)) {
+        const prop = property as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+        if (prop.type === 'date' && prop.date?.start) {
+          metadata.properties[key] = prop.date.start;
+          if (prop.date.end) {
+            metadata.properties[`${key}_end`] = prop.date.end;
           }
-        });
-        
-        // 겹침을 위해 마지막 부분 유지
-        const words = currentChunk.split(' ');
-        const overlapWords = words.slice(-Math.floor(overlap / 5)); // 대략적인 겹침
-        currentChunk = overlapWords.join(' ') + '\n\n' + paragraph;
-        chunkIndex++;
-      } else {
-        currentChunk += (currentChunk ? '\n\n' : '') + paragraph;
+        }
       }
     }
     
-    // 마지막 청크 저장
-    if (currentChunk.trim().length > 0) {
+    if (content.length <= chunkSize) {
+      // 내용이 청크 크기보다 작으면 그대로 사용
       chunks.push({
-        id: `${page.id}_chunk_${chunkIndex}`,
-        content: currentChunk.trim(),
+        id: `${page.id || 'chunk'}-0`,
+        content,
         metadata: {
-          title,
-          pageId: page.id,
-          lastModified: page.last_edited_time || new Date().toISOString(),
-          url: page.url,
-          properties: page.properties,
+          title: metadata.title,
+          pageId: metadata.pageId,
+          lastModified: metadata.lastModified,
+          url: metadata.url,
+          properties: metadata.properties,
+          chunkIndex: 0,
+          totalChunks: 1
         }
       });
+    } else {
+      // 내용을 여러 청크로 분할
+      let startIndex = 0;
+      let chunkIndex = 0;
+      
+      while (startIndex < content.length) {
+        const endIndex = Math.min(startIndex + chunkSize, content.length);
+        const chunkContent = content.substring(startIndex, endIndex);
+        
+        chunks.push({
+          id: `${page.id || 'chunk'}-${chunkIndex}`,
+          content: chunkContent,
+          metadata: {
+            title: metadata.title,
+            pageId: metadata.pageId,
+            lastModified: metadata.lastModified,
+            url: metadata.url,
+            properties: metadata.properties,
+            chunkIndex,
+            totalChunks: Math.ceil(content.length / (chunkSize - overlap))
+          }
+        });
+        
+        startIndex += chunkSize - overlap;
+        chunkIndex++;
+      }
     }
     
     return chunks;
@@ -209,11 +242,21 @@ export class RAGSystem {
   }
 
   /**
-   * 쿼리에 대한 유사한 청크 검색
+   * 쿼리에 대한 유사한 청크 검색 (날짜 필터링 개선)
    */
   async searchSimilarChunks(query: string, topK: number = 5): Promise<SearchResult[]> {
     // 쿼리 임베딩 생성
     const queryEmbedding = await this.getQueryEmbedding(query);
+    
+    // 현재 날짜 기준 설정
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const sevenDaysLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    
+    // 날짜 관련 키워드 감지
+    const isRecentQuery = /최근|요즘|지금|오늘|이번|근래/i.test(query);
+    const isUpcomingQuery = /다가오는|앞으로|미래|예정|곧/i.test(query);
+    const isPastQuery = /지난|과거|전에|이전/i.test(query);
     
     // 모든 청크와 유사도 계산
     const similarities: SearchResult[] = [];
@@ -222,10 +265,69 @@ export class RAGSystem {
       if (!chunk.embedding) continue;
       
       const similarity = this.cosineSimilarity(queryEmbedding, chunk.embedding);
-      similarities.push({
-        chunk,
-        score: similarity
-      });
+      
+      // 날짜 필터링 적용
+      if (isRecentQuery || isUpcomingQuery || isPastQuery) {
+        const chunkDates = this.extractDatesFromChunk(chunk);
+        
+        if (chunkDates.length > 0) {
+          let dateMatches = false;
+          
+          for (const chunkDate of chunkDates) {
+            if (isRecentQuery) {
+              // 최근: 현재 날짜 기준 ±7일
+              if (chunkDate >= sevenDaysAgo && chunkDate <= sevenDaysLater) {
+                dateMatches = true;
+                break;
+              }
+            } else if (isUpcomingQuery) {
+              // 다가오는: 현재 날짜 이후
+              if (chunkDate > now) {
+                dateMatches = true;
+                break;
+              }
+            } else if (isPastQuery) {
+              // 지난: 현재 날짜 이전
+              if (chunkDate < now) {
+                dateMatches = true;
+                break;
+              }
+            }
+          }
+          
+          // 날짜 조건에 맞지 않으면 제외 (단, 너무 오래된 데이터는 더 강하게 필터링)
+          if (!dateMatches) {
+            // 2024년 이전 데이터는 "최근"에서 완전 제외
+            if (isRecentQuery && chunkDates.some(d => d.getFullYear() < 2024)) {
+              continue;
+            }
+            // 다른 경우는 유사도를 낮춤
+            similarities.push({
+              chunk,
+              score: similarity * 0.3 // 날짜 조건에 맞지 않으면 점수를 크게 낮춤
+            });
+            continue;
+          }
+          
+          // 날짜 조건에 맞으면 보너스 점수
+          similarities.push({
+            chunk,
+            score: similarity * 1.2 // 날짜 조건에 맞으면 점수 향상
+          });
+        } else {
+          // 날짜 정보가 없는 청크는 점수를 낮춤
+          similarities.push({
+            chunk,
+            score: similarity * 0.5
+          });
+        }
+      } else {
+        // 날짜 관련 쿼리가 아닌 경우 기본 점수
+        similarities.push({
+          chunk,
+          score: similarity
+        });
+      }
     }
     
     // 유사도 순으로 정렬하여 상위 K개 반환
@@ -363,5 +465,55 @@ export class RAGSystem {
       embeddingsCount: this.embeddings.size,
       isReady: this.chunks.length > 0 && this.embeddings.size > 0,
     };
+  }
+
+  /**
+   * 청크에서 날짜 정보 추출
+   */
+  private extractDatesFromChunk(chunk: DocumentChunk): Date[] {
+    const dates: Date[] = [];
+    const content = chunk.content;
+    
+    // 한국어 날짜 형식 매칭 (예: 2025. 6. 27., 2025년 6월 27일)
+    const koreanDateRegex = /(\d{4})[년\.\s]*(\d{1,2})[월\.\s]*(\d{1,2})[일\.\s]*/g;
+    let match;
+    
+    while ((match = koreanDateRegex.exec(content)) !== null) {
+      const year = parseInt(match[1]);
+      const month = parseInt(match[2]) - 1; // JavaScript Date는 0-based month
+      const day = parseInt(match[3]);
+      
+      if (year >= 2020 && year <= 2030 && month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+        dates.push(new Date(year, month, day));
+      }
+    }
+    
+    // ISO 날짜 형식 매칭 (예: 2025-06-27)
+    const isoDateRegex = /(\d{4})-(\d{2})-(\d{2})/g;
+    while ((match = isoDateRegex.exec(content)) !== null) {
+      const year = parseInt(match[1]);
+      const month = parseInt(match[2]) - 1;
+      const day = parseInt(match[3]);
+      
+      if (year >= 2020 && year <= 2030 && month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+        dates.push(new Date(year, month, day));
+      }
+    }
+    
+    // 메타데이터에서 날짜 정보 추출
+    if (chunk.metadata.properties) {
+      for (const [key, value] of Object.entries(chunk.metadata.properties)) {
+        if (key.toLowerCase().includes('date') || key.includes('날짜') || key.includes('일정')) {
+          if (typeof value === 'string') {
+            const date = new Date(value);
+            if (!isNaN(date.getTime()) && date.getFullYear() >= 2020 && date.getFullYear() <= 2030) {
+              dates.push(date);
+            }
+          }
+        }
+      }
+    }
+    
+    return dates;
   }
 } 
