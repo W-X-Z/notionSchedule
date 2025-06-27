@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { RAGSystem } from '@/lib/rag';
 
 export async function POST(request: NextRequest) {
   try {
     console.log('=== Chat API 호출 시작 ===');
     const body = await request.json();
-    const { message, notionData } = body;
+    const { message, notionData, useRAG = true } = body;
     
     console.log('받은 메시지:', message);
     console.log('Notion 데이터 길이:', notionData?.length || 0);
+    console.log('RAG 사용 여부:', useRAG);
 
     if (!message) {
       console.log('ERROR: 메시지가 없음');
@@ -60,18 +62,73 @@ export async function POST(request: NextRequest) {
       apiKey: openaiApiKey,
     });
 
-    // Notion 데이터 확인
-    if (!notionData || notionData.trim() === '') {
-      console.log('WARNING: Notion 데이터가 비어있음');
-    } else {
-      console.log('Notion 데이터 샘플 (첫 100자):', notionData.substring(0, 100) + '...');
+    let contextData = '';
+    let searchInfo = '';
+    let ragSuccess = false;
+
+    // RAG 시스템 사용 시도
+    if (useRAG) {
+      try {
+        console.log('RAG 시스템 초기화 중...');
+        const ragSystem = new RAGSystem();
+        const hasData = await ragSystem.loadFromLocalStorage();
+        
+        if (hasData && ragSystem.getStatus().isReady) {
+          console.log('RAG 시스템 로드 성공, 관련 정보 검색 중...');
+          
+          // 관련 정보 검색
+          const searchResults = await ragSystem.searchSimilarChunks(message, 5);
+          contextData = ragSystem.formatSearchResults(searchResults);
+          searchInfo = `RAG 검색: ${searchResults.length}개 관련 문서 발견 (평균 유사도: ${(searchResults.reduce((sum, r) => sum + r.score, 0) / searchResults.length * 100).toFixed(1)}%)`;
+          ragSuccess = true;
+          
+          console.log('RAG 검색 완료:', searchInfo);
+          console.log('컨텍스트 데이터 길이:', contextData.length);
+        } else {
+          console.log('RAG 데이터가 없음, 기존 방식으로 폴백');
+          throw new Error('RAG 시스템이 초기화되지 않았습니다.');
+        }
+      } catch (ragError) {
+        console.warn('RAG 시스템 사용 실패, 기존 방식으로 전환:', ragError);
+        ragSuccess = false;
+      }
+    }
+
+    // RAG 실패 또는 비활성화 시 기존 데이터 사용
+    if (!ragSuccess) {
+      if (!notionData || notionData.trim() === '') {
+        console.log('WARNING: Notion 데이터가 비어있음');
+        contextData = '사용 가능한 데이터가 없습니다.';
+      } else {
+        contextData = notionData;
+        console.log('기존 Notion 데이터 사용, 샘플 (첫 100자):', notionData.substring(0, 100) + '...');
+      }
+      searchInfo = '전체 데이터베이스 검색';
     }
 
     // 시스템 메시지 구성
-    const systemMessage = `${systemPrompt || '당신은 도움이 되는 AI 어시스턴트입니다.'}
+    const baseSystemPrompt = systemPrompt || '당신은 도움이 되는 AI 어시스턴트입니다.';
+    
+    const systemMessage = ragSuccess 
+      ? `${baseSystemPrompt}
+
+사용자의 질문과 관련하여 다음 정보를 검색했습니다:
+
+${contextData}
+
+위 검색된 정보를 주로 참고하여 사용자의 질문에 정확하고 도움이 되는 답변을 제공해주세요.
+검색된 정보와 관련이 없는 질문이라면, 관련 정보를 찾을 수 없다고 명확히 말씀해주세요.
+답변할 때는 어떤 문서나 정보를 참고했는지 언급해주세요.
+
+**중요**: 날짜 관련 질문에 답할 때는 다음 사항을 반드시 고려하세요:
+- 모든 관련 항목의 날짜를 정확히 확인하고 비교하세요
+- 날짜 형식을 올바르게 해석하세요 (YYYY-MM-DD)
+- 프로젝트 완료/마무리를 묻는 질문에서는 End Date, 완료일, 종료일 등의 속성을 우선 확인하세요
+- 답변하기 전에 관련된 모든 데이터를 검토하고 가장 정확한 정보를 제공하세요`
+      : `${baseSystemPrompt}
 
 다음은 Notion 데이터베이스의 내용입니다:
-${notionData}
+${contextData}
 
 위 정보를 바탕으로 사용자의 질문에 답변해주세요.
 
@@ -82,7 +139,7 @@ ${notionData}
 - 답변하기 전에 관련된 모든 데이터를 검토하고 가장 정확한 정보를 제공하세요`;
 
     console.log('시스템 메시지 길이:', systemMessage.length);
-    console.log('시스템 프롬프트:', systemPrompt || '기본 프롬프트 사용');
+    console.log('검색 정보:', searchInfo);
 
     // OpenAI API 호출
     console.log('OpenAI API 호출 시작...');
@@ -109,7 +166,12 @@ ${notionData}
     console.log('최종 응답 길이:', response.length);
     console.log('최종 응답 샘플:', response.substring(0, 100) + (response.length > 100 ? '...' : ''));
 
-    return NextResponse.json({ message: response });
+    return NextResponse.json({ 
+      message: response,
+      searchInfo,
+      ragUsed: ragSuccess,
+      contextLength: contextData.length
+    });
   } catch (error) {
     console.error('=== Chat API 오류 발생 ===');
     console.error('오류 타입:', error?.constructor?.name);
@@ -118,8 +180,8 @@ ${notionData}
     
     // OpenAI API 오류인 경우 더 자세한 정보
     if (error && typeof error === 'object' && 'response' in error) {
-      console.error('OpenAI API 응답 상태:', (error as any).response?.status);
-      console.error('OpenAI API 응답 데이터:', (error as any).response?.data);
+      console.error('OpenAI API 응답 상태:', (error as any).response?.status); // eslint-disable-line @typescript-eslint/no-explicit-any
+      console.error('OpenAI API 응답 데이터:', (error as any).response?.data); // eslint-disable-line @typescript-eslint/no-explicit-any
     }
     
     return NextResponse.json(

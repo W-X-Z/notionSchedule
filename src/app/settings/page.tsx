@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, RefreshCw, Eye, EyeOff, Sparkles, Database, Bot, Zap, CheckCircle, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Save, RefreshCw, Eye, EyeOff, Sparkles, Database, Bot, Zap, CheckCircle, AlertCircle, Brain, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 interface Settings {
@@ -44,6 +44,13 @@ export default function SettingsPage() {
   const [showOpenaiKey, setShowOpenaiKey] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [isInitializingRAG, setIsInitializingRAG] = useState(false);
+  const [ragStatus, setRagStatus] = useState<{
+    chunksCount: number;
+    embeddingsCount: number;
+    isReady: boolean;
+  } | null>(null);
+  const [ragLastUpdated, setRagLastUpdated] = useState<string | null>(null);
 
   useEffect(() => {
     // 로컬 스토리지에서 설정 불러오기
@@ -56,6 +63,15 @@ export default function SettingsPage() {
     const lastUpdate = localStorage.getItem('notion-data-last-updated');
     if (lastUpdate) {
       setLastUpdated(lastUpdate);
+    }
+
+    // RAG 상태 확인
+    checkRAGStatus();
+    
+    // RAG 마지막 업데이트 시간 불러오기
+    const ragLastUpdate = localStorage.getItem('rag-last-updated');
+    if (ragLastUpdate) {
+      setRagLastUpdated(ragLastUpdate);
     }
   }, []);
 
@@ -75,6 +91,55 @@ export default function SettingsPage() {
     } catch (error) {
       setSaveStatus('error');
       setTimeout(() => setSaveStatus('idle'), 2000);
+    }
+  };
+
+  const checkRAGStatus = async () => {
+    try {
+      const response = await fetch('/api/initialize-rag', {
+        method: 'GET',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setRagStatus(data.status);
+      }
+    } catch {
+      // RAG 상태 확인 실패 시 무시
+    }
+  };
+
+  const initializeRAG = async () => {
+    if (!settings.openaiApiKey) {
+      alert('OpenAI API 키를 먼저 설정해주세요.');
+      return;
+    }
+
+    setIsInitializingRAG(true);
+    try {
+      const response = await fetch('/api/initialize-rag', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('RAG 시스템 초기화에 실패했습니다.');
+      }
+
+      const data = await response.json();
+      const updateTime = new Date().toLocaleString('ko-KR');
+      setRagLastUpdated(updateTime);
+      localStorage.setItem('rag-last-updated', updateTime);
+      setRagStatus(data.status);
+      
+      alert(`RAG 시스템이 성공적으로 초기화되었습니다. (${data.status.chunksCount}개 청크, ${data.status.embeddingsCount}개 임베딩)`);
+    } catch (error) {
+      console.error('RAG 초기화 오류:', error);
+      alert('RAG 시스템 초기화 중 오류가 발생했습니다.');
+    } finally {
+      setIsInitializingRAG(false);
     }
   };
 
@@ -300,6 +365,72 @@ export default function SettingsPage() {
                 className="input-field resize-none"
                 placeholder="시스템 프롬프트를 입력하세요..."
               />
+            </div>
+          </div>
+
+          {/* RAG System Management Card */}
+          <div className="card p-8">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="w-12 h-12 bg-gradient-to-br from-violet-600 to-purple-600 rounded-2xl flex items-center justify-center">
+                <Brain className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">RAG 시스템</h2>
+                <p className="text-gray-600">지능형 검색 및 응답 시스템</p>
+              </div>
+            </div>
+            
+            <div className="bg-gradient-to-r from-violet-50 to-purple-50/50 p-6 rounded-2xl border border-violet-200/50 mb-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex-1">
+                  <p className="text-gray-700 font-medium mb-2">
+                    RAG(Retrieval-Augmented Generation) 시스템을 사용하여 더 정확하고 효율적인 응답을 제공합니다.
+                  </p>
+                  <div className="space-y-2">
+                    {ragStatus && ragStatus.isReady ? (
+                      <>
+                        <div className="flex items-center space-x-2 text-sm text-green-600">
+                          <CheckCircle className="w-4 h-4" />
+                          <span>RAG 시스템 활성화됨</span>
+                        </div>
+                        <div className="flex items-center space-x-2 text-sm text-gray-600">
+                          <Search className="w-4 h-4" />
+                          <span>{ragStatus.chunksCount}개 문서 청크, {ragStatus.embeddingsCount}개 임베딩</span>
+                        </div>
+                        {ragLastUpdated && (
+                          <div className="flex items-center space-x-2 text-sm text-gray-600">
+                            <CheckCircle className="w-4 h-4 text-green-600" />
+                            <span>마지막 업데이트: {ragLastUpdated}</span>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="flex items-center space-x-2 text-sm text-orange-600">
+                        <AlertCircle className="w-4 h-4" />
+                        <span>RAG 시스템이 초기화되지 않았습니다</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={initializeRAG}
+                  disabled={isInitializingRAG || !settings.openaiApiKey}
+                  className="btn-primary flex items-center space-x-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700"
+                >
+                  <Brain size={18} className={isInitializingRAG ? 'animate-pulse' : ''} />
+                  <span>{isInitializingRAG ? 'RAG 초기화 중...' : 'RAG 초기화'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-200/50">
+              <h4 className="font-semibold text-blue-900 mb-2">💡 RAG 시스템의 장점</h4>
+              <ul className="text-sm text-blue-800 space-y-1">
+                <li>• <strong>비용 효율성:</strong> 관련 정보만 검색하여 토큰 사용량 90% 절감</li>
+                <li>• <strong>정확성 향상:</strong> 질문과 관련된 정보만 선별하여 더 정확한 답변</li>
+                <li>• <strong>빠른 응답:</strong> 전체 데이터 대신 관련 부분만 처리하여 응답 속도 향상</li>
+                <li>• <strong>확장성:</strong> 데이터가 증가해도 성능 저하 없이 동작</li>
+              </ul>
             </div>
           </div>
 

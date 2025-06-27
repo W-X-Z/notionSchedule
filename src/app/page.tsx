@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Settings, Send, RotateCcw, Bot, User, Sparkles, MessageCircle, Zap, Database } from 'lucide-react';
+import { Settings, Send, RotateCcw, Bot, User, Sparkles, MessageCircle, Zap, Database, Brain, Search, Clock } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 interface Message {
@@ -9,6 +9,9 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  searchInfo?: string;
+  ragUsed?: boolean;
+  contextLength?: number;
 }
 
 const DEFAULT_QUESTIONS = [
@@ -91,7 +94,8 @@ export default function Home() {
       console.log('API 호출 준비...');
       const requestBody = { 
         message: content.trim(),
-        notionData: notionData
+        notionData: notionData,
+        useRAG: true // RAG 시스템 사용 활성화
       };
       console.log('요청 본문 크기:', JSON.stringify(requestBody).length);
 
@@ -119,7 +123,10 @@ export default function Home() {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: data.message,
-        timestamp: new Date()
+        timestamp: new Date(),
+        searchInfo: data.searchInfo,
+        ragUsed: data.ragUsed,
+        contextLength: data.contextLength
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -269,13 +276,33 @@ export default function Home() {
                           {message.content}
                         </p>
                       </div>
-                      <div className="mt-2">
-                        <span className="text-xs text-gray-500">
-                          {message.timestamp.toLocaleTimeString('ko-KR', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                        </span>
+                      <div className="mt-2 flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <span className="text-xs text-gray-500 flex items-center space-x-1">
+                            <Clock size={12} />
+                            <span>
+                              {message.timestamp.toLocaleTimeString('ko-KR', {
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </span>
+                          </span>
+                          {message.role === 'assistant' && message.searchInfo && (
+                            <span className={`text-xs px-2 py-1 rounded-full flex items-center space-x-1 ${
+                              message.ragUsed 
+                                ? 'bg-violet-100 text-violet-700' 
+                                : 'bg-gray-100 text-gray-600'
+                            }`}>
+                              {message.ragUsed ? <Brain size={12} /> : <Search size={12} />}
+                              <span>{message.searchInfo}</span>
+                            </span>
+                          )}
+                        </div>
+                        {message.role === 'assistant' && message.contextLength && (
+                          <span className="text-xs text-gray-400">
+                            {(message.contextLength / 1000).toFixed(1)}k chars
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
