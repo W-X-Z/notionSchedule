@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RAGSystem } from '@/lib/rag';
+import { Client } from '@notionhq/client';
 
 export async function POST(request: NextRequest) {
   try {
@@ -43,29 +44,71 @@ export async function POST(request: NextRequest) {
       });
     }
     
-    // 노션 데이터 가져오기
-    const notionResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/update-notion-data`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        apiKey: notionApiKey,
-        databaseId: notionDatabaseId,
-      }),
+    // 노션 데이터 직접 가져오기 (내부 API 호출 대신)
+    console.log('노션 데이터를 가져오는 중...');
+    const notion = new Client({
+      auth: notionApiKey,
     });
-    
-    if (!notionResponse.ok) {
-      throw new Error('노션 데이터를 가져올 수 없습니다.');
+
+    // 데이터베이스 쿼리 실행
+    let allResults: unknown[] = [];
+    let hasMore = true;
+    let nextCursor: string | undefined = undefined;
+
+    while (hasMore) {
+      const response = await notion.databases.query({
+        database_id: notionDatabaseId,
+        start_cursor: nextCursor,
+        page_size: 100,
+      });
+
+      allResults = allResults.concat(response.results);
+      hasMore = response.has_more;
+      nextCursor = response.next_cursor || undefined;
     }
+
+    // 간단한 텍스트 추출 함수
+    const extractSimpleText = (page: unknown): string => {
+      const pageObj = page as Record<string, unknown>;
+      const properties = pageObj.properties as Record<string, unknown>;
+      
+      let text = '';
+      
+      // 제목 추출
+      for (const [, value] of Object.entries(properties)) {
+        const prop = value as any;
+        if (prop.type === 'title' && prop.title) {
+          const title = prop.title.map((t: any) => t.plain_text).join('');
+          text += `제목: ${title}\n`;
+          break;
+        }
+      }
+      
+      // 기본 속성들 추출
+      for (const [key, value] of Object.entries(properties)) {
+        const prop = value as any;
+        if (prop.type === 'rich_text' && prop.rich_text?.length > 0) {
+          const content = prop.rich_text.map((t: any) => t.plain_text).join('');
+          if (content) {
+            text += `${key}: ${content}\n`;
+          }
+        }
+      }
+      
+      text += `생성일: ${new Date(pageObj.created_time as string).toLocaleString('ko-KR')}\n`;
+      text += `마지막 수정: ${new Date(pageObj.last_edited_time as string).toLocaleString('ko-KR')}\n`;
+      text += '---\n';
+      
+      return text;
+    };
+
+    const notionData = allResults.map(extractSimpleText).join('\n');
     
-    const notionResult = await notionResponse.json();
-    
-    if (!notionResult.success || !notionResult.data) {
+    if (!notionData.trim()) {
       throw new Error('노션 데이터가 비어있습니다.');
     }
     
-    console.log(`노션 데이터를 처리 중... (${notionResult.count}개 항목)`);
+    console.log(`노션 데이터를 처리 중... (${allResults.length}개 항목)`);
     
     // 노션 API에서 받은 텍스트 데이터를 RAG용 객체 배열로 변환
     const notionPages = [{
@@ -75,7 +118,7 @@ export async function POST(request: NextRequest) {
           title: [{ plain_text: '노션 데이터베이스' }]
         }
       },
-      content: notionResult.data,
+      content: notionData,
       last_edited_time: new Date().toISOString(),
       url: `https://notion.so/${notionDatabaseId}`
     }];
