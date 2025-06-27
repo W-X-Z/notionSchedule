@@ -290,7 +290,7 @@ export class RAGSystem {
   }
 
   /**
-   * 데이터 저장 (로컬 스토리지)
+   * 데이터 저장 (임시 디렉토리 또는 메모리)
    */
   async saveToLocalStorage(): Promise<void> {
     const data = {
@@ -299,34 +299,42 @@ export class RAGSystem {
       lastUpdated: new Date().toISOString(),
     };
     
-    // Node.js 환경에서는 파일 시스템 사용
+    // Node.js 환경에서는 임시 디렉토리 사용 (Vercel 호환)
     if (typeof window === 'undefined') {
-      const fs = await import('fs');
-      const path = await import('path');
-      
-      const dataPath = path.join(process.cwd(), 'data', 'rag-data.json');
-      const dir = path.dirname(dataPath);
-      
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      try {
+        const fs = await import('fs');
+        const path = await import('path');
+        const os = await import('os');
+        
+        // Vercel에서는 /tmp 디렉토리만 쓰기 가능
+        const tmpDir = os.tmpdir();
+        const dataPath = path.join(tmpDir, 'rag-data.json');
+        
+        fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
+        console.log(`RAG 데이터를 임시 디렉토리에 저장했습니다: ${dataPath}`);
+      } catch (error) {
+        console.warn('파일 시스템 저장 실패, 메모리에서만 유지됩니다:', error);
+        // 파일 저장에 실패해도 메모리에는 데이터가 있으므로 계속 진행
       }
-      
-      fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
     }
   }
 
   /**
-   * 데이터 로드 (로컬 스토리지)
+   * 데이터 로드 (임시 디렉토리에서)
    */
   async loadFromLocalStorage(): Promise<boolean> {
     try {
       if (typeof window === 'undefined') {
         const fs = await import('fs');
         const path = await import('path');
+        const os = await import('os');
         
-        const dataPath = path.join(process.cwd(), 'data', 'rag-data.json');
+        // 임시 디렉토리에서 데이터 찾기
+        const tmpDir = os.tmpdir();
+        const dataPath = path.join(tmpDir, 'rag-data.json');
         
         if (!fs.existsSync(dataPath)) {
+          console.log('임시 디렉토리에 RAG 데이터가 없습니다.');
           return false;
         }
         

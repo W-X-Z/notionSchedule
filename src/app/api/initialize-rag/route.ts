@@ -39,17 +39,9 @@ export async function POST(request: NextRequest) {
     const ragSystem = new RAGSystem();
     ragSystem.initializeOpenAI(openaiApiKey);
     
-    // 기존 데이터가 있는지 확인
-    const hasExistingData = await ragSystem.loadFromLocalStorage();
-    
-    if (hasExistingData) {
-      const status = ragSystem.getStatus();
-      return NextResponse.json({
-        success: true,
-        message: '기존 RAG 데이터를 로드했습니다.',
-        status,
-      });
-    }
+    // 서버리스 환경에서는 매번 새로 초기화
+    // (임시 디렉토리도 요청 간에 유지되지 않음)
+    console.log('서버리스 환경에서 RAG 시스템을 새로 초기화합니다.');
     
     // 노션 데이터 직접 가져오기 (내부 API 호출 대신)
     console.log('노션 데이터를 가져오는 중...');
@@ -138,9 +130,8 @@ export async function POST(request: NextRequest) {
     await ragSystem.generateEmbeddings();
     console.log('임베딩 생성 완료');
     
-    // 로컬 스토리지에 저장
-    await ragSystem.saveToLocalStorage();
-    console.log('RAG 데이터 저장 완료');
+    // 서버리스 환경에서는 메모리에만 유지
+    console.log('RAG 시스템이 메모리에 준비되었습니다.');
     
     const status = ragSystem.getStatus();
     
