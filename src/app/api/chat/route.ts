@@ -7,6 +7,12 @@ interface SimpleNotionProperty {
   type: string;
   title?: Array<{ plain_text: string }>;
   rich_text?: Array<{ plain_text: string }>;
+  date?: { start: string; end?: string } | null;
+  select?: { name: string } | null;
+  multi_select?: Array<{ name: string }>;
+  number?: number | null;
+  checkbox?: boolean;
+  url?: string | null;
 }
 
 export async function POST(request: NextRequest) {
@@ -130,11 +136,47 @@ export async function POST(request: NextRequest) {
           // 기본 속성들 추출
           for (const [key, value] of Object.entries(properties)) {
             const prop = value as SimpleNotionProperty;
-            if (prop.type === 'rich_text' && prop.rich_text && prop.rich_text.length > 0) {
-              const content = prop.rich_text.map((t) => t.plain_text).join('');
-              if (content) {
-                text += `${key}: ${content}\n`;
-              }
+            
+            switch (prop.type) {
+              case 'rich_text':
+                if (prop.rich_text && prop.rich_text.length > 0) {
+                  const content = prop.rich_text.map((t) => t.plain_text).join('');
+                  if (content) {
+                    text += `${key}: ${content}\n`;
+                  }
+                }
+                break;
+              case 'date':
+                if (prop.date && prop.date.start) {
+                  const startDate = new Date(prop.date.start).toLocaleDateString('ko-KR');
+                  const endDate = prop.date.end ? ` ~ ${new Date(prop.date.end).toLocaleDateString('ko-KR')}` : '';
+                  text += `${key}: ${startDate}${endDate}\n`;
+                }
+                break;
+              case 'select':
+                if (prop.select && prop.select.name) {
+                  text += `${key}: ${prop.select.name}\n`;
+                }
+                break;
+              case 'multi_select':
+                if (prop.multi_select && prop.multi_select.length > 0) {
+                  const tags = prop.multi_select.map((item) => item.name).join(', ');
+                  text += `${key}: ${tags}\n`;
+                }
+                break;
+              case 'number':
+                if (prop.number !== null && prop.number !== undefined) {
+                  text += `${key}: ${prop.number}\n`;
+                }
+                break;
+              case 'checkbox':
+                text += `${key}: ${prop.checkbox ? '예' : '아니오'}\n`;
+                break;
+              case 'url':
+                if (prop.url) {
+                  text += `${key}: ${prop.url}\n`;
+                }
+                break;
             }
           }
           
@@ -197,9 +239,17 @@ export async function POST(request: NextRequest) {
 
     // 시스템 메시지 구성
     const baseSystemPrompt = systemPrompt || '당신은 도움이 되는 AI 어시스턴트입니다.';
+    const currentDate = new Date().toLocaleDateString('ko-KR', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long'
+    });
     
     const systemMessage = ragSuccess 
       ? `${baseSystemPrompt}
+
+**현재 날짜: ${currentDate}**
 
 사용자의 질문과 관련하여 다음 정보를 검색했습니다:
 
@@ -207,25 +257,34 @@ ${contextData}
 
 위 검색된 정보를 주로 참고하여 사용자의 질문에 정확하고 도움이 되는 답변을 제공해주세요.
 검색된 정보와 관련이 없는 질문이라면, 관련 정보를 찾을 수 없다고 명확히 말씀해주세요.
-답변할 때는 어떤 문서나 정보를 참고했는지 언급해주세요.
 
-**중요**: 날짜 관련 질문에 답할 때는 다음 사항을 반드시 고려하세요:
-- 모든 관련 항목의 날짜를 정확히 확인하고 비교하세요
-- 날짜 형식을 올바르게 해석하세요 (YYYY-MM-DD)
-- 프로젝트 완료/마무리를 묻는 질문에서는 End Date, 완료일, 종료일 등의 속성을 우선 확인하세요
-- 답변하기 전에 관련된 모든 데이터를 검토하고 가장 정확한 정보를 제공하세요`
+**중요 - 날짜 관련 질문 처리 규칙**:
+1. **현재 날짜 기준**: 오늘은 ${currentDate}입니다. 이를 기준으로 "최근", "다가오는", "지난" 등을 판단하세요.
+2. **최근 일정**: 현재 날짜로부터 7일 이내의 과거 또는 미래 일정만 포함하세요.
+3. **다가오는 일정**: 현재 날짜 이후의 일정만 포함하세요.
+4. **지난 일정**: 현재 날짜 이전의 일정만 포함하세요.
+5. **날짜 비교**: 생성일/수정일이 아닌 실제 일정 날짜(Start Date, End Date, 날짜 속성)를 우선 확인하세요.
+6. **오래된 데이터 제외**: 2023년 등 현재와 너무 차이나는 과거 데이터는 "최근"에 포함하지 마세요.
+
+답변할 때는 어떤 문서나 정보를 참고했는지 언급하고, 날짜가 현재와 얼마나 차이나는지도 명시해주세요.`
       : `${baseSystemPrompt}
+
+**현재 날짜: ${currentDate}**
 
 다음은 Notion 데이터베이스의 내용입니다:
 ${contextData}
 
 위 정보를 바탕으로 사용자의 질문에 답변해주세요.
 
-**중요**: 날짜 관련 질문에 답할 때는 다음 사항을 반드시 고려하세요:
-- 모든 관련 항목의 날짜를 정확히 확인하고 비교하세요
-- 날짜 형식을 올바르게 해석하세요 (YYYY-MM-DD)
-- 프로젝트 완료/마무리를 묻는 질문에서는 End Date, 완료일, 종료일 등의 속성을 우선 확인하세요
-- 답변하기 전에 관련된 모든 데이터를 검토하고 가장 정확한 정보를 제공하세요`;
+**중요 - 날짜 관련 질문 처리 규칙**:
+1. **현재 날짜 기준**: 오늘은 ${currentDate}입니다. 이를 기준으로 "최근", "다가오는", "지난" 등을 판단하세요.
+2. **최근 일정**: 현재 날짜로부터 7일 이내의 과거 또는 미래 일정만 포함하세요.
+3. **다가오는 일정**: 현재 날짜 이후의 일정만 포함하세요.
+4. **지난 일정**: 현재 날짜 이전의 일정만 포함하세요.
+5. **날짜 비교**: 생성일/수정일이 아닌 실제 일정 날짜(Start Date, End Date, 날짜 속성)를 우선 확인하세요.
+6. **오래된 데이터 제외**: 2023년 등 현재와 너무 차이나는 과거 데이터는 "최근"에 포함하지 마세요.
+
+답변할 때는 날짜가 현재와 얼마나 차이나는지도 명시해주세요.`;
 
     console.log('시스템 메시지 길이:', systemMessage.length);
     console.log('검색 정보:', searchInfo);
