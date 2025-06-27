@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { RAGSystem } from '@/lib/rag';
 import { Client } from '@notionhq/client';
 
+// 간단한 Notion 속성 타입 정의
+interface SimpleNotionProperty {
+  type: string;
+  title?: Array<{ plain_text: string }>;
+  rich_text?: Array<{ plain_text: string }>;
+}
+
 export async function POST(request: NextRequest) {
   try {
     console.log('RAG 시스템 초기화 시작...');
@@ -76,9 +83,9 @@ export async function POST(request: NextRequest) {
       
       // 제목 추출
       for (const [, value] of Object.entries(properties)) {
-        const prop = value as any;
+        const prop = value as SimpleNotionProperty;
         if (prop.type === 'title' && prop.title) {
-          const title = prop.title.map((t: any) => t.plain_text).join('');
+          const title = prop.title.map((t) => t.plain_text).join('');
           text += `제목: ${title}\n`;
           break;
         }
@@ -86,9 +93,9 @@ export async function POST(request: NextRequest) {
       
       // 기본 속성들 추출
       for (const [key, value] of Object.entries(properties)) {
-        const prop = value as any;
-        if (prop.type === 'rich_text' && prop.rich_text?.length > 0) {
-          const content = prop.rich_text.map((t: any) => t.plain_text).join('');
+        const prop = value as SimpleNotionProperty;
+        if (prop.type === 'rich_text' && prop.rich_text && prop.rich_text.length > 0) {
+          const content = prop.rich_text.map((t) => t.plain_text).join('');
           if (content) {
             text += `${key}: ${content}\n`;
           }
