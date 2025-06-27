@@ -80,7 +80,7 @@ export default function SettingsPage() {
       localStorage.setItem('notion-chatbot-settings', JSON.stringify(settings));
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
-    } catch (error) {
+    } catch {
       setSaveStatus('error');
       setTimeout(() => setSaveStatus('idle'), 2000);
     }

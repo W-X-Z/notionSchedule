@@ -1,6 +1,61 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Client } from '@notionhq/client';
 
+// Notion API 타입 정의
+interface NotionPage {
+  id: string;
+  properties: Record<string, unknown>;
+  url: string;
+  created_time: string;
+  last_edited_time: string;
+}
+
+interface NotionProperty {
+  type: string;
+  title?: Array<{ plain_text: string }>;
+  rich_text?: Array<{ plain_text: string }>;
+  number?: number | null;
+  select?: { name: string } | null;
+  multi_select?: Array<{ name: string }>;
+  date?: { start: string } | null;
+  checkbox?: boolean;
+  url?: string | null;
+  email?: string | null;
+  phone_number?: string | null;
+}
+
+interface NotionBlock {
+  type: string;
+  paragraph?: {
+    rich_text?: Array<{ plain_text: string }>;
+  };
+  heading_1?: {
+    rich_text?: Array<{ plain_text: string }>;
+  };
+  heading_2?: {
+    rich_text?: Array<{ plain_text: string }>;
+  };
+  heading_3?: {
+    rich_text?: Array<{ plain_text: string }>;
+  };
+  bulleted_list_item?: {
+    rich_text?: Array<{ plain_text: string }>;
+  };
+  numbered_list_item?: {
+    rich_text?: Array<{ plain_text: string }>;
+  };
+  to_do?: {
+    rich_text?: Array<{ plain_text: string }>;
+    checked?: boolean;
+  };
+  code?: {
+    rich_text?: Array<{ plain_text: string }>;
+  };
+  quote?: {
+    rich_text?: Array<{ plain_text: string }>;
+  };
+}
+
 export async function POST(request: NextRequest) {
   let apiKey: string = '';
   let databaseId: string = '';
@@ -22,7 +77,7 @@ export async function POST(request: NextRequest) {
     });
 
     // 데이터베이스 쿼리 실행
-    let allResults: any[] = [];
+    let allResults: unknown[] = [];
     let hasMore = true;
     let nextCursor: string | undefined = undefined;
 
@@ -41,41 +96,50 @@ export async function POST(request: NextRequest) {
 
     // 페이지 내용 추출
     const extractedData = await Promise.all(
-      allResults.map(async (page: any) => {
+      allResults.map(async (page: unknown) => {
         try {
+          // 타입 가드를 사용하여 page 객체의 타입 확인
+          const pageObj = page as Record<string, unknown>;
+          const pageId = pageObj.id as string;
+          const pageProperties = pageObj.properties as Record<string, unknown>;
+          const pageUrl = pageObj.url as string;
+          const pageCreatedTime = pageObj.created_time as string;
+          const pageLastEditedTime = pageObj.last_edited_time as string;
+
           // 페이지 내용 가져오기
           const pageContent = await notion.blocks.children.list({
-            block_id: page.id,
+            block_id: pageId,
           });
 
           // 페이지 제목 추출
-          const title = extractTitle(page.properties);
+          const title = extractTitle(pageProperties);
           
           // 페이지 내용 텍스트 추출
-          const content = extractContentFromBlocks(pageContent.results);
+          const content = extractContentFromBlocks(pageContent.results as NotionBlock[]);
           
           // 페이지 속성 추출
-          const properties = extractProperties(page.properties);
+          const properties = extractProperties(pageProperties);
 
           return {
-            id: page.id,
+            id: pageId,
             title,
             content,
             properties,
-            url: page.url,
-            createdTime: page.created_time,
-            lastEditedTime: page.last_edited_time,
+            url: pageUrl,
+            createdTime: pageCreatedTime,
+            lastEditedTime: pageLastEditedTime,
           };
         } catch (error) {
-          console.error(`Error processing page ${page.id}:`, error);
+          console.error(`Error processing page:`, error);
+          const pageObj = page as Record<string, unknown>;
           return {
-            id: page.id,
+            id: pageObj.id as string || 'unknown',
             title: 'Error loading page',
             content: '',
             properties: {},
-            url: page.url,
-            createdTime: page.created_time,
-            lastEditedTime: page.last_edited_time,
+            url: pageObj.url as string || '',
+            createdTime: pageObj.created_time as string || '',
+            lastEditedTime: pageObj.last_edited_time as string || '',
           };
         }
       })
@@ -137,11 +201,12 @@ export async function POST(request: NextRequest) {
 }
 
 // 페이지 제목 추출
-function extractTitle(properties: any): string {
-  for (const [key, value] of Object.entries(properties)) {
-    if ((value as any).type === 'title' && (value as any).title) {
-      return (value as any).title
-        .map((text: any) => text.plain_text)
+function extractTitle(properties: Record<string, unknown>): string {
+  for (const [, value] of Object.entries(properties)) {
+    const prop = value as NotionProperty;
+    if (prop.type === 'title' && prop.title) {
+      return prop.title
+        .map((text) => text.plain_text)
         .join('');
     }
   }
@@ -149,22 +214,22 @@ function extractTitle(properties: any): string {
 }
 
 // 페이지 속성 추출
-function extractProperties(properties: any): Record<string, string> {
+function extractProperties(properties: Record<string, unknown>): Record<string, string> {
   const extracted: Record<string, string> = {};
   
   for (const [key, value] of Object.entries(properties)) {
-    const prop = value as any;
+    const prop = value as NotionProperty;
     
     switch (prop.type) {
       case 'rich_text':
         if (prop.rich_text && prop.rich_text.length > 0) {
           extracted[key] = prop.rich_text
-            .map((text: any) => text.plain_text)
+            .map((text) => text.plain_text)
             .join('');
         }
         break;
       case 'number':
-        if (prop.number !== null) {
+        if (prop.number !== null && prop.number !== undefined) {
           extracted[key] = prop.number.toString();
         }
         break;
@@ -176,7 +241,7 @@ function extractProperties(properties: any): Record<string, string> {
       case 'multi_select':
         if (prop.multi_select && prop.multi_select.length > 0) {
           extracted[key] = prop.multi_select
-            .map((item: any) => item.name)
+            .map((item) => item.name)
             .join(', ');
         }
         break;
@@ -210,46 +275,46 @@ function extractProperties(properties: any): Record<string, string> {
 }
 
 // 블록에서 텍스트 내용 추출
-function extractContentFromBlocks(blocks: any[]): string {
+function extractContentFromBlocks(blocks: NotionBlock[]): string {
   return blocks
     .map((block) => {
       switch (block.type) {
         case 'paragraph':
           return block.paragraph?.rich_text
-            ?.map((text: any) => text.plain_text)
+            ?.map((text) => text.plain_text)
             .join('') || '';
         case 'heading_1':
           return `# ${block.heading_1?.rich_text
-            ?.map((text: any) => text.plain_text)
+            ?.map((text) => text.plain_text)
             .join('') || ''}`;
         case 'heading_2':
           return `## ${block.heading_2?.rich_text
-            ?.map((text: any) => text.plain_text)
+            ?.map((text) => text.plain_text)
             .join('') || ''}`;
         case 'heading_3':
           return `### ${block.heading_3?.rich_text
-            ?.map((text: any) => text.plain_text)
+            ?.map((text) => text.plain_text)
             .join('') || ''}`;
         case 'bulleted_list_item':
           return `• ${block.bulleted_list_item?.rich_text
-            ?.map((text: any) => text.plain_text)
+            ?.map((text) => text.plain_text)
             .join('') || ''}`;
         case 'numbered_list_item':
           return `1. ${block.numbered_list_item?.rich_text
-            ?.map((text: any) => text.plain_text)
+            ?.map((text) => text.plain_text)
             .join('') || ''}`;
         case 'to_do':
           const checked = block.to_do?.checked ? '[x]' : '[ ]';
           return `${checked} ${block.to_do?.rich_text
-            ?.map((text: any) => text.plain_text)
+            ?.map((text) => text.plain_text)
             .join('') || ''}`;
         case 'quote':
           return `> ${block.quote?.rich_text
-            ?.map((text: any) => text.plain_text)
+            ?.map((text) => text.plain_text)
             .join('') || ''}`;
         case 'code':
           return `\`\`\`\n${block.code?.rich_text
-            ?.map((text: any) => text.plain_text)
+            ?.map((text) => text.plain_text)
             .join('') || ''}\n\`\`\``;
         default:
           return '';
